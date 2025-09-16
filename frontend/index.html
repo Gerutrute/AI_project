@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LLM 마을 관찰 뷰</title>
+    <style>
+      body {
+        font-family: "Noto Sans KR", system-ui, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #f2efe8;
+        color: #1f2933;
+      }
+      header {
+        padding: 1.5rem;
+        background: #3a6b35;
+        color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+        padding: 1.5rem;
+      }
+      section {
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(58, 107, 53, 0.08);
+        padding: 1rem 1.5rem;
+        display: flex;
+        flex-direction: column;
+        min-height: 200px;
+      }
+      h2 {
+        margin-top: 0;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        max-height: 320px;
+        overflow-y: auto;
+      }
+      li + li {
+        margin-top: 0.75rem;
+      }
+      .npc-card {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        border-radius: 10px;
+        background: #eef5ed;
+      }
+      .npc-card strong {
+        font-size: 1.1rem;
+      }
+      .mood {
+        font-size: 0.85rem;
+        color: #3a6b35;
+      }
+      .logs {
+        font-size: 0.95rem;
+        line-height: 1.4;
+      }
+      .logs time {
+        font-size: 0.8rem;
+        color: #738290;
+        display: block;
+      }
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }
+      select,
+      textarea,
+      button {
+        padding: 0.75rem;
+        border-radius: 8px;
+        border: 1px solid #d1d5db;
+        font-size: 1rem;
+        font-family: inherit;
+      }
+      button {
+        background: #3a6b35;
+        color: white;
+        cursor: pointer;
+        border: none;
+        transition: background 0.2s ease-in-out;
+      }
+      button:hover {
+        background: #2b4f27;
+      }
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        background: #3a6b35;
+        color: white;
+        padding: 1rem 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>LLM 농촌 마을</h1>
+      <button id="advance-time">시간 흐르게 하기</button>
+    </header>
+    <main>
+      <section>
+        <h2>NPC 현황</h2>
+        <ul id="npc-list"></ul>
+      </section>
+      <section>
+        <h2>대화 로그</h2>
+        <ul id="log-list" class="logs"></ul>
+      </section>
+      <section>
+        <h2>플레이어 대화</h2>
+        <form id="talk-form">
+          <label>
+            대화할 NPC
+            <select id="npc-select"></select>
+          </label>
+          <label>
+            메시지
+            <textarea id="message" rows="4" placeholder="따뜻한 말을 건네보세요"></textarea>
+          </label>
+          <button type="submit">대화하기</button>
+        </form>
+      </section>
+      <section>
+        <h2>시뮬레이션 상태</h2>
+        <div id="sim-status">1일차 0번째 시간</div>
+      </section>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script>
+      const API_BASE = "/api";
+      const npcListEl = document.getElementById("npc-list");
+      const logListEl = document.getElementById("log-list");
+      const npcSelectEl = document.getElementById("npc-select");
+      const talkForm = document.getElementById("talk-form");
+      const messageEl = document.getElementById("message");
+      const advanceBtn = document.getElementById("advance-time");
+      const simStatusEl = document.getElementById("sim-status");
+      const toastEl = document.getElementById("toast");
+
+      async function fetchJSON(url, options) {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+          throw new Error(`Request failed: ${response.status}`);
+        }
+        return await response.json();
+      }
+
+      function moodLabel(mood) {
+        const labels = {
+          happy: "😊 기쁨",
+          neutral: "🙂 보통",
+          tired: "😴 피곤",
+          hungry: "🍞 배고픔",
+          exhausted: "💤 탈진",
+        };
+        return labels[mood] || mood;
+      }
+
+      function renderNPCs(npcs) {
+        npcListEl.innerHTML = "";
+        npcSelectEl.innerHTML = "";
+        npcs.forEach((npc) => {
+          const li = document.createElement("li");
+          li.className = "npc-card";
+          li.innerHTML = `
+            <div>
+              <strong>${npc.name}</strong> <span class="mood">${moodLabel(npc.mood)}</span><br />
+              <small>${npc.role}</small>
+            </div>
+            <div>
+              ❤️ ${npc.affection} · 💪 ${npc.stamina} · 🍚 ${npc.hunger}
+            </div>
+          `;
+          npcListEl.appendChild(li);
+
+          const option = document.createElement("option");
+          option.value = npc.npc_id;
+          option.textContent = `${npc.name} (${npc.role})`;
+          npcSelectEl.appendChild(option);
+        });
+      }
+
+      function renderLogs(logs) {
+        logListEl.innerHTML = "";
+        logs
+          .slice()
+          .reverse()
+          .forEach((log) => {
+            const li = document.createElement("li");
+            const speaker = log.speaker_id === "player" ? "플레이어" : log.speaker_id;
+            const target = log.target_id
+              ? ` → ${log.target_id === "player" ? "플레이어" : log.target_id}`
+              : "";
+            li.innerHTML = `
+              <time>${new Date(log.timestamp).toLocaleTimeString()}</time>
+              <strong>${speaker}${target}</strong><br />
+              ${log.message}
+            `;
+            logListEl.appendChild(li);
+          });
+      }
+
+      function showToast(message) {
+        toastEl.textContent = message;
+        toastEl.style.display = "block";
+        setTimeout(() => {
+          toastEl.style.display = "none";
+        }, 2500);
+      }
+
+      async function refreshAll() {
+        const [npcData, logData] = await Promise.all([
+          fetchJSON(`${API_BASE}/npcs`),
+          fetchJSON(`${API_BASE}/logs?limit=40`),
+        ]);
+        renderNPCs(npcData.npcs);
+        renderLogs(logData.logs);
+      }
+
+      talkForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const npcId = npcSelectEl.value;
+        const message = messageEl.value.trim();
+        if (!message) {
+          showToast("메시지를 입력해주세요");
+          return;
+        }
+        const result = await fetchJSON(`${API_BASE}/interactions/user`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ npc_id: npcId, message }),
+        });
+        showToast(`${result.npc.name}의 반응: ${result.reply}`);
+        messageEl.value = "";
+        await refreshAll();
+      });
+
+      advanceBtn.addEventListener("click", async () => {
+        const result = await fetchJSON(`${API_BASE}/simulate/tick`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ steps: 1 }),
+        });
+        simStatusEl.textContent = `${result.day}일차 ${result.time_slice % 4}번째 시간`;
+        showToast("시간이 조금 흘렀습니다");
+        await refreshAll();
+      });
+
+      refreshAll();
+    </script>
+  </body>
+</html>
